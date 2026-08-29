@@ -262,6 +262,28 @@ class MessageType(StrEnum):
     ERROR = "E"
 
 
+class FavoriteScope(StrEnum):
+    """The scope in which a Russound favorite is stored."""
+
+    SYSTEM = "system"
+    ZONE = "zone"
+
+
+@dataclass(frozen=True)
+class RussoundFavorite:
+    """A valid Russound system or zone favorite."""
+
+    favorite_id: int
+    scope: FavoriteScope
+    name: str | None = None
+    zone_device_str: str | None = None
+    source_id: int | None = None
+    source_type: str | None = None
+    provider_mode: str | None = None
+    album_cover_url: str | None = None
+    player_data: str | None = None
+
+
 @dataclass
 class RussoundMessage:
     """Incoming russound message."""

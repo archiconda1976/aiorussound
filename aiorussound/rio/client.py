@@ -30,6 +30,10 @@ from aiorussound.exceptions import (
     UnsupportedFeatureError,
     RussoundError,
 )
+from aiorussound.rio.favorites import (
+    discover_system_favorites,
+    discover_zone_favorites,
+)
 from aiorussound.rio.models import (
     RussoundMessage,
     CallbackType,
@@ -37,6 +41,7 @@ from aiorussound.rio.models import (
     Zone,
     MessageType,
     PartyMode,
+    RussoundFavorite,
 )
 from aiorussound.util import (
     controller_device_str,
@@ -302,6 +307,22 @@ class RussoundRIOClient:
         value = None if not value or value == "------" else value
         return RussoundMessage(tag, m.group(1) or None, m.group(2), value)
 
+    async def get_system_favorites(
+        self, *, include_player_data: bool = False
+    ) -> tuple[RussoundFavorite, ...]:
+        """Return valid system favorites available from the RIO controller."""
+        return await discover_system_favorites(
+            self, include_player_data=include_player_data
+        )
+
+    async def get_zone_favorites(
+        self, zone_device_str: str, *, include_player_data: bool = False
+    ) -> tuple[RussoundFavorite, ...]:
+        """Return valid favorites stored for a controller-routed zone."""
+        return await discover_zone_favorites(
+            self, zone_device_str, include_player_data=include_player_data
+        )
+
     async def consumer_handler(self, handler: RussoundConnectionHandler):
         """Callback consumer handler."""
         try:
@@ -512,6 +533,14 @@ class ZoneControlSurface(Zone):
         args = " ".join(str(x) for x in args)
         cmd = f"EVENT {self.device_str}!{event_name} {args}"
         return await self.client.request(cmd)
+
+    async def get_favorites(
+        self, *, include_player_data: bool = False
+    ) -> tuple[RussoundFavorite, ...]:
+        """Return valid favorites stored for this zone."""
+        return await self.client.get_zone_favorites(
+            self.device_str, include_player_data=include_player_data
+        )
 
     def fetch_current_source(self) -> Source:
         """Return the current source as a source object."""

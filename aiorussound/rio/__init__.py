@@ -1,5 +1,6 @@
 from .models import Source, RussoundMessage, Zone
 from .client import Controller, RussoundRIOClient
+from .favorites import FavoriteScope, RussoundFavorite
 
 __all__ = [
     "RussoundRIOClient",
@@ -7,4 +8,6 @@ __all__ = [
     "Zone",
     "Source",
     "RussoundMessage",
+    "FavoriteScope",
+    "RussoundFavorite",
 ]
