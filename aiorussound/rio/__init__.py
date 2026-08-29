@@ -1,4 +1,5 @@
 from .client import Controller, RussoundRIOClient
+from .favorites import FavoriteScope, RussoundFavorite
 from .media_management import MediaManagementSelectOption, MediaManagementSession
 from .models import (
     MediaManagementMenuItem,
@@ -10,10 +11,12 @@ from .models import (
 
 __all__ = [
     "Controller",
+    "FavoriteScope",
     "MediaManagementMenuItem",
     "MediaManagementMenuPage",
     "MediaManagementSelectOption",
     "MediaManagementSession",
+    "RussoundFavorite",
     "RussoundMessage",
     "RussoundRIOClient",
     "Source",

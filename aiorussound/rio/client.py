@@ -4,50 +4,54 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from asyncio import Future, Task, AbstractEventLoop, Queue
-from dataclasses import field, dataclass
+from asyncio import AbstractEventLoop, Future, Queue, Task
+from dataclasses import dataclass, field
 from typing import Any, Coroutine, Optional
 
 from mashumaro import field_options
 
 from aiorussound.connection import RussoundConnectionHandler
 from aiorussound.const import (
+    CONTROLLER_TYPE_FIX_MAP,
     FLAGS_BY_VERSION,
+    KEEP_ALIVE_INTERVAL,
+    MAX_RNET_CONTROLLERS,
     MAX_SOURCE,
     MINIMUM_API_SUPPORT,
-    FeatureFlag,
-    MAX_RNET_CONTROLLERS,
-    KEEP_ALIVE_INTERVAL,
-    TIMEOUT,
-    CONTROLLER_TYPE_FIX_MAP,
     PRESET_COMPATIBLE_SOURCES,
+    TIMEOUT,
     TOTAL_BANKS,
     TOTAL_PRESETS_PER_BANK,
+    FeatureFlag,
 )
 from aiorussound.exceptions import (
     CommandError,
-    UnsupportedFeatureError,
     RussoundError,
+    UnsupportedFeatureError,
 )
-from aiorussound.rio.models import (
-    RussoundMessage,
-    CallbackType,
-    Source,
-    Zone,
-    MessageType,
-    PartyMode,
+from aiorussound.rio.favorites import (
+    discover_system_favorites,
+    discover_zone_favorites,
 )
 from aiorussound.rio.media_management import MediaManagementSession
+from aiorussound.rio.models import (
+    CallbackType,
+    PartyMode,
+    RussoundFavorite,
+    RussoundMessage,
+    Source,
+    Zone,
+)
 from aiorussound.rio.protocol import process_response as parse_response
 from aiorussound.util import (
     controller_device_str,
+    get_max_zones,
     is_feature_supported,
     is_fw_version_higher,
+    is_rnet_capable,
+    map_rio_to_dict,
     source_device_str,
     zone_device_str,
-    is_rnet_capable,
-    get_max_zones,
-    map_rio_to_dict,
 )
 
 _LOGGER = logging.getLogger(__package__)
@@ -289,6 +293,22 @@ class RussoundRIOClient:
             page_size=page_size,
         )
 
+    async def get_system_favorites(
+        self, *, include_player_data: bool = False
+    ) -> tuple[RussoundFavorite, ...]:
+        """Return valid system favorites available from the RIO controller."""
+        return await discover_system_favorites(
+            self, include_player_data=include_player_data
+        )
+
+    async def get_zone_favorites(
+        self, zone_device_str: str, *, include_player_data: bool = False
+    ) -> tuple[RussoundFavorite, ...]:
+        """Return valid favorites stored for a controller-routed zone."""
+        return await discover_zone_favorites(
+            self, zone_device_str, include_player_data=include_player_data
+        )
+
     async def consumer_handler(self, handler: RussoundConnectionHandler):
         """Callback consumer handler."""
         try:
@@ -506,6 +526,14 @@ class ZoneControlSurface(Zone):
         """Create a dedicated Media Management session for this zone."""
         return self.client.create_media_management_session(
             self.device_str, page_size=page_size
+        )
+
+    async def get_favorites(
+        self, *, include_player_data: bool = False
+    ) -> tuple[RussoundFavorite, ...]:
+        """Return valid favorites stored for this zone."""
+        return await self.client.get_zone_favorites(
+            self.device_str, include_player_data=include_player_data
         )
 
     def fetch_current_source(self) -> Source:
