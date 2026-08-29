@@ -4,30 +4,30 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from asyncio import AbstractEventLoop, Future, Queue, Task
-from dataclasses import dataclass, field
+from asyncio import Future, Task, AbstractEventLoop, Queue
+from dataclasses import field, dataclass
 from typing import Any, Coroutine, Optional
 
 from mashumaro import field_options
 
 from aiorussound.connection import RussoundConnectionHandler
 from aiorussound.const import (
-    CONTROLLER_TYPE_FIX_MAP,
     FLAGS_BY_VERSION,
-    KEEP_ALIVE_INTERVAL,
-    MAX_RNET_CONTROLLERS,
     MAX_SOURCE,
     MINIMUM_API_SUPPORT,
-    PRESET_COMPATIBLE_SOURCES,
+    FeatureFlag,
+    MAX_RNET_CONTROLLERS,
+    KEEP_ALIVE_INTERVAL,
     TIMEOUT,
+    CONTROLLER_TYPE_FIX_MAP,
+    PRESET_COMPATIBLE_SOURCES,
     TOTAL_BANKS,
     TOTAL_PRESETS_PER_BANK,
-    FeatureFlag,
 )
 from aiorussound.exceptions import (
     CommandError,
-    RussoundError,
     UnsupportedFeatureError,
+    RussoundError,
 )
 from aiorussound.rio.favorites import (
     delete_system_favorite,
@@ -43,23 +43,23 @@ from aiorussound.rio.favorites import (
 )
 from aiorussound.rio.media_management import MediaManagementSession
 from aiorussound.rio.models import (
-    CallbackType,
-    PartyMode,
-    RussoundFavorite,
     RussoundMessage,
+    CallbackType,
     Source,
     Zone,
+    PartyMode,
+    RussoundFavorite,
 )
 from aiorussound.rio.protocol import process_response as parse_response
 from aiorussound.util import (
     controller_device_str,
-    get_max_zones,
     is_feature_supported,
     is_fw_version_higher,
-    is_rnet_capable,
-    map_rio_to_dict,
     source_device_str,
     zone_device_str,
+    is_rnet_capable,
+    get_max_zones,
+    map_rio_to_dict,
 )
 
 _LOGGER = logging.getLogger(__package__)
