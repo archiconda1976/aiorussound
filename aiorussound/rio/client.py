@@ -30,8 +30,16 @@ from aiorussound.exceptions import (
     UnsupportedFeatureError,
 )
 from aiorussound.rio.favorites import (
+    delete_system_favorite,
+    delete_zone_favorite,
     discover_system_favorites,
     discover_zone_favorites,
+    rename_system_favorite,
+    restore_player_data,
+    restore_system_favorite,
+    restore_zone_favorite,
+    save_system_favorite,
+    save_zone_favorite,
 )
 from aiorussound.rio.media_management import MediaManagementSession
 from aiorussound.rio.models import (
@@ -309,6 +317,10 @@ class RussoundRIOClient:
             self, zone_device_str, include_player_data=include_player_data
         )
 
+    async def rename_system_favorite(self, favorite_id: int, name: str) -> str:
+        """Rename a system favorite."""
+        return await rename_system_favorite(self, favorite_id, name)
+
     async def consumer_handler(self, handler: RussoundConnectionHandler):
         """Callback consumer handler."""
         try:
@@ -535,6 +547,36 @@ class ZoneControlSurface(Zone):
         return await self.client.get_zone_favorites(
             self.device_str, include_player_data=include_player_data
         )
+
+    async def save_system_favorite(self, favorite_id: int, name: str) -> str:
+        """Save the current source as a system-wide favorite."""
+        return await save_system_favorite(
+            self.client, self.device_str, favorite_id, name
+        )
+
+    async def save_zone_favorite(self, favorite_id: int, name: str) -> str:
+        """Save the current source as a favorite for this zone."""
+        return await save_zone_favorite(self.client, self.device_str, favorite_id, name)
+
+    async def restore_system_favorite(self, favorite_id: int) -> str:
+        """Restore a system-wide favorite in this zone."""
+        return await restore_system_favorite(self.client, self.device_str, favorite_id)
+
+    async def restore_zone_favorite(self, favorite_id: int) -> str:
+        """Restore a favorite saved for this zone."""
+        return await restore_zone_favorite(self.client, self.device_str, favorite_id)
+
+    async def delete_system_favorite(self, favorite_id: int) -> str:
+        """Delete a system-wide favorite using this zone's RIO context."""
+        return await delete_system_favorite(self.client, self.device_str, favorite_id)
+
+    async def delete_zone_favorite(self, favorite_id: int) -> str:
+        """Delete a favorite saved for this zone."""
+        return await delete_zone_favorite(self.client, self.device_str, favorite_id)
+
+    async def restore_player_data(self, player_data: str) -> str:
+        """Restore media playback in this zone from favorite player data."""
+        return await restore_player_data(self.client, self.device_str, player_data)
 
     def fetch_current_source(self) -> Source:
         """Return the current source as a source object."""
