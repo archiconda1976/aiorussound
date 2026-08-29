@@ -6,7 +6,7 @@ import asyncio
 import logging
 import re
 from asyncio import Future, Task
-from typing import Self
+from typing import Literal, Self
 
 from aiorussound.connection import RussoundConnectionHandler
 from aiorussound.const import TIMEOUT
@@ -20,6 +20,7 @@ from aiorussound.rio.protocol import process_response
 
 DEFAULT_MEDIA_MANAGEMENT_PAGE_SIZE = 100
 DEFAULT_MEDIA_MANAGEMENT_KEEP_ALIVE_INTERVAL = 45.0
+MediaManagementSelectOption = Literal["default", "norestore"]
 
 _CONTROLLER_ZONE_RE = re.compile(r"^C\[\d+]\.Z\[\d+]$")
 _LOGGER = logging.getLogger(__package__)
@@ -59,6 +60,7 @@ class MediaManagementSession:
         self._keep_alive_task: Task[None] | None = None
         self._response_future: Future[RussoundMessage] | None = None
         self._page_future: Future[MediaManagementMenuPage] | None = None
+        self._current_page: MediaManagementMenuPage | None = None
 
     async def __aenter__(self) -> Self:
         """Connect to the dedicated Media Management socket."""
@@ -73,6 +75,11 @@ class MediaManagementSession:
     def is_connected(self) -> bool:
         """Return whether the session consumer is active."""
         return self._consumer_task is not None and not self._consumer_task.done()
+
+    @property
+    def current_page(self) -> MediaManagementMenuPage | None:
+        """Return the most recently received Media Management menu page."""
+        return self._current_page
 
     async def connect(self) -> None:
         """Connect and begin consuming RIO responses."""
@@ -101,6 +108,68 @@ class MediaManagementSession:
         if self._keep_alive_task is None or self._keep_alive_task.done():
             self._keep_alive_task = asyncio.create_task(self._keep_alive())
         return page
+
+    async def start_item(self, item_id: int) -> None:
+        """Set the absolute menu position for later item pagination.
+
+        This is available only because the session is configured with
+        ``MMIndex \"ABSOLUTE\"``.
+        """
+        await self._send_event("MMStartItem", _menu_item_index(item_id))
+
+    async def next_items(self) -> MediaManagementMenuPage:
+        """Return the next page in the current menu."""
+        return await self._request_menu_page("MMNextItems")
+
+    async def previous_items(self) -> MediaManagementMenuPage:
+        """Return the previous page in the current menu."""
+        return await self._request_menu_page("MMPrevItems")
+
+    async def previous_screen(
+        self, *, expect_page: bool = True
+    ) -> MediaManagementMenuPage | None:
+        """Navigate to the previous MM screen.
+
+        Set ``expect_page`` to ``False`` when the caller expects an info or
+        now-playing screen rather than a menu.
+        """
+        return await self._send_event("MMPrevScreen", expect_page=expect_page)
+
+    async def select_item(
+        self,
+        item_id: int,
+        *,
+        select_option: MediaManagementSelectOption | None = None,
+        expect_page: bool = True,
+    ) -> MediaManagementMenuPage | None:
+        """Select a menu item from the current page.
+
+        ``select_option`` is sent immediately before ``MMSelectItem`` while
+        retaining the session command lock, as required by the RIO protocol.
+        For a playable leaf item, set ``expect_page`` to ``False`` because the
+        device transitions to its now-playing screen instead of returning a
+        menu page.
+        """
+        item_index = _menu_item_index(item_id)
+        if select_option not in (None, "default", "norestore"):
+            raise ValueError("select_option must be 'default' or 'norestore'")
+
+        async with self._command_lock:
+            if select_option is not None:
+                await self._send_event_locked("MMSelectOption", select_option)
+            return await self._send_event_locked(
+                "MMSelectItem", item_index, expect_page=expect_page
+            )
+
+    async def open_item_context_menu(self, item_id: int) -> MediaManagementMenuPage:
+        """Return the context menu for an item marked as having one."""
+        return await self._request_menu_page(
+            "MMItemContextMenu", _menu_item_index(item_id)
+        )
+
+    async def open_context_menu(self) -> MediaManagementMenuPage:
+        """Return the context menu for the current now-playing item."""
+        return await self._request_menu_page("MMContextMenu")
 
     async def close(self) -> None:
         """Close the Media Management session and its dedicated connection."""
@@ -131,6 +200,15 @@ class MediaManagementSession:
             return await self._send_event_locked(
                 event_name, *args, expect_page=expect_page
             )
+
+    async def _request_menu_page(
+        self, event_name: str, *args: str
+    ) -> MediaManagementMenuPage:
+        """Send a command which is documented to produce a menu page."""
+        page = await self._send_event(event_name, *args, expect_page=True)
+        if page is None:
+            raise RussoundError(f"{event_name} did not return a menu page")
+        return page
 
     async def _send_event_locked(
         self, event_name: str, *args: str, expect_page: bool = False
@@ -196,6 +274,7 @@ class MediaManagementSession:
 
     def _set_page(self, page: MediaManagementMenuPage) -> None:
         """Resolve the page expected by the current navigation operation."""
+        self._current_page = page
         if self._page_future is not None and not self._page_future.done():
             self._page_future.set_result(page)
 
@@ -222,3 +301,12 @@ def _event_command(zone_device_str: str, event_name: str, *args: str) -> str:
     """Build a controller-routed Media Management EVENT command."""
     arguments = f" {' '.join(args)}" if args else ""
     return f"EVENT {zone_device_str}!{event_name}{arguments}"
+
+
+def _menu_item_index(item_id: int) -> str:
+    """Validate and format a protocol menu item index."""
+    if isinstance(item_id, bool) or not isinstance(item_id, int):
+        raise TypeError("Media Management item_id must be an integer")
+    if not 1 <= item_id <= 2**32:
+        raise ValueError("Media Management item_id must be between 1 and 2^32")
+    return str(item_id)
