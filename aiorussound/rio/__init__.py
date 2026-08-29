@@ -1,4 +1,5 @@
-from .media_management import MediaManagementSession
+from .client import Controller, RussoundRIOClient
+from .media_management import MediaManagementSelectOption, MediaManagementSession
 from .models import (
     MediaManagementMenuItem,
     MediaManagementMenuPage,
@@ -6,15 +7,15 @@ from .models import (
     Source,
     Zone,
 )
-from .client import Controller, RussoundRIOClient
 
 __all__ = [
-    "RussoundRIOClient",
     "Controller",
-    "Zone",
-    "Source",
-    "RussoundMessage",
     "MediaManagementMenuItem",
     "MediaManagementMenuPage",
+    "MediaManagementSelectOption",
     "MediaManagementSession",
+    "RussoundMessage",
+    "RussoundRIOClient",
+    "Source",
+    "Zone",
 ]
