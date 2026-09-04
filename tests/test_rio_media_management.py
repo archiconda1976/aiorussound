@@ -123,9 +123,9 @@ async def test_initializes_controller_json_session() -> None:
     assert page.num_items == 2
     assert connection.commands == [
         "EVENT C[1].Z[2]!MMVerbosity 2",
-        'EVENT C[1].Z[2]!MMIndex "ABSOLUTE"',
+        "EVENT C[1].Z[2]!MMIndex ABSOLUTE",
         "EVENT C[1].Z[2]!MMMaxItems 25",
-        'EVENT C[1].Z[2]!MMFormat "JSON"',
+        "EVENT C[1].Z[2]!MMFormat JSON",
         "EVENT C[1].Z[2]!MMInit",
     ]
 
@@ -162,9 +162,9 @@ async def test_navigates_controller_menu_pages() -> None:
 
     assert connection.commands == [
         "EVENT C[1].Z[2]!MMVerbosity 2",
-        'EVENT C[1].Z[2]!MMIndex "ABSOLUTE"',
+        "EVENT C[1].Z[2]!MMIndex ABSOLUTE",
         "EVENT C[1].Z[2]!MMMaxItems 100",
-        'EVENT C[1].Z[2]!MMFormat "JSON"',
+        "EVENT C[1].Z[2]!MMFormat JSON",
         "EVENT C[1].Z[2]!MMInit",
         "EVENT C[1].Z[2]!MMStartItem 20",
         "EVENT C[1].Z[2]!MMNextItems",
@@ -197,7 +197,7 @@ async def test_selects_playable_item_without_waiting_for_menu_page() -> None:
 @pytest.mark.asyncio
 async def test_propagates_media_management_command_error() -> None:
     """A command error fails the initializing call rather than timing out."""
-    connection = FakeMediaManagementConnection(fail_command='MMFormat "JSON"')
+    connection = FakeMediaManagementConnection(fail_command="MMFormat JSON")
     session = MediaManagementSession(connection, "C[1].Z[2]")
 
     with pytest.raises(CommandError, match="unsupported command"):

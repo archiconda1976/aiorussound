@@ -95,9 +95,9 @@ class MediaManagementSession:
         await self.connect()
         async with self._command_lock:
             await self._send_event_locked("MMVerbosity", "2")
-            await self._send_event_locked("MMIndex", '"ABSOLUTE"')
+            await self._send_event_locked("MMIndex", "ABSOLUTE")
             await self._send_event_locked("MMMaxItems", str(self._page_size))
-            await self._send_event_locked("MMFormat", '"JSON"')
+            await self._send_event_locked("MMFormat", "JSON")
             page = await self._send_event_locked("MMInit", expect_page=True)
 
         if page is None:
@@ -113,7 +113,7 @@ class MediaManagementSession:
         """Set the absolute menu position for later item pagination.
 
         This is available only because the session is configured with
-        ``MMIndex \"ABSOLUTE\"``.
+        ``MMIndex ABSOLUTE``.
         """
         await self._send_event("MMStartItem", _menu_item_index(item_id))
 
