@@ -6,14 +6,21 @@ import asyncio
 import logging
 import re
 from asyncio import Future, Task
+from collections.abc import Callable
 from typing import Protocol, Self
 
+from aiorussound.connection import RussoundConnectionHandler
 from aiorussound.const import TIMEOUT
-from aiorussound.exceptions import CommandError, RussoundError
+from aiorussound.exceptions import (
+    CommandError,
+    MediaManagementInitializationTimeoutError,
+    RussoundError,
+)
 from aiorussound.rio.models import MediaManagementMenuPage
 
 DEFAULT_MEDIA_MANAGEMENT_PAGE_SIZE = 100
 DEFAULT_MEDIA_MANAGEMENT_KEEP_ALIVE_INTERVAL = 45.0
+SOURCE_INITIALIZATION_ATTEMPTS = 2
 
 _CONTROLLER_ZONE_RE = re.compile(r"^C\[\d+\]\.Z\[\d+\]$")
 _LOGGER = logging.getLogger(__package__)
@@ -198,3 +205,176 @@ def _event_command(zone_device_str: str, event_name: str, *args: str) -> str:
     """Build a controller-routed Media Management EVENT command."""
     arguments = f" {' '.join(args)}" if args else ""
     return f"EVENT {zone_device_str}!{event_name}{arguments}"
+
+
+class SourceEditionMediaManagementSession:
+    """A short-lived TCP session addressed to one Source Edition streamer."""
+
+    def __init__(
+        self,
+        connection_factory: Callable[[], RussoundConnectionHandler],
+        source_id: int,
+        *,
+        page_size: int = DEFAULT_MEDIA_MANAGEMENT_PAGE_SIZE,
+    ) -> None:
+        """Initialize a source-addressed Media Management session."""
+        if not 1 <= source_id <= 255:
+            raise ValueError("Media Management source_id must be between 1 and 255")
+        if not 1 <= page_size <= 255:
+            raise ValueError("Media Management page size must be between 1 and 255")
+        self._connection_factory = connection_factory
+        self._source_device_str = f"S[{source_id}]"
+        self._page_size = page_size
+        self._connection: RussoundConnectionHandler | None = None
+        self._consumer_task: Task[None] | None = None
+        self._keep_alive_task: Task[None] | None = None
+        self._response_future: Future[None] | None = None
+        self._page_future: Future[MediaManagementMenuPage] | None = None
+        self._command_lock = asyncio.Lock()
+
+    async def __aenter__(self) -> Self:
+        """Enter the source session context."""
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        """Close the source session context."""
+        await self.close()
+
+    async def initialize(self) -> MediaManagementMenuPage:
+        """Configure the streamer session and return its top-level page."""
+        for attempt in range(SOURCE_INITIALIZATION_ATTEMPTS):
+            try:
+                page = await self._initialize_once()
+                break
+            except MediaManagementInitializationTimeoutError:
+                if attempt + 1 == SOURCE_INITIALIZATION_ATTEMPTS:
+                    raise
+                _LOGGER.warning(
+                    "Media Management initialization for %s was acknowledged without "
+                    "a menu page; retrying on a fresh TCP connection",
+                    self._source_device_str,
+                )
+                await self._close_connection()
+        else:
+            raise AssertionError("Media Management initialization attempts exhausted")
+
+        self._keep_alive_task = asyncio.create_task(self._keep_alive())
+        return page
+
+    async def _initialize_once(self) -> MediaManagementMenuPage:
+        """Initialize one fresh Source Edition socket session."""
+        await self._open()
+        async with self._command_lock:
+            await self._send_event_locked("MMVerbosity", "2")
+            await self._send_event_locked("MMIndex", "ABSOLUTE")
+            await self._send_event_locked("MMMaxItems", str(self._page_size))
+            await self._send_event_locked("MMFormat", "JSON")
+            page = await self._send_event_locked("MMInit", expect_page=True)
+        if page is None:
+            raise RussoundError("Media Management initialization did not return a menu page")
+        return page
+
+    async def close(self) -> None:
+        """End the source session and release its dedicated socket."""
+        if self._connection is not None:
+            try:
+                await self._send_event("MMClose")
+            except (CommandError, RussoundError, TimeoutError):
+                _LOGGER.debug("Unable to close Media Management session cleanly")
+        if self._keep_alive_task is not None and not self._keep_alive_task.done():
+            self._keep_alive_task.cancel()
+        if self._keep_alive_task is not None:
+            try:
+                await self._keep_alive_task
+            except asyncio.CancelledError:
+                pass
+        await self._close_connection()
+
+    async def _open(self) -> None:
+        await self._close_connection()
+        self._connection = self._connection_factory()
+        await self._connection.connect()
+        if self._connection.reader is None:
+            raise RussoundError("Media Management connection did not provide a reader")
+        self._consumer_task = asyncio.create_task(self._consume())
+
+    async def _send_event(self, event_name: str, *args: str) -> None:
+        async with self._command_lock:
+            await self._send_event_locked(event_name, *args)
+
+    async def _send_event_locked(
+        self, event_name: str, *args: str, expect_page: bool = False
+    ) -> MediaManagementMenuPage | None:
+        if self._connection is None:
+            raise RussoundError("Media Management session is not connected")
+        self._response_future = asyncio.get_running_loop().create_future()
+        self._page_future = asyncio.get_running_loop().create_future() if expect_page else None
+        command = _event_command(self._source_device_str, event_name, *args)
+        try:
+            await self._connection.write_str(command)
+            await asyncio.wait_for(self._response_future, timeout=TIMEOUT)
+            if self._page_future is not None:
+                try:
+                    return await asyncio.wait_for(self._page_future, timeout=TIMEOUT)
+                except TimeoutError as err:
+                    if event_name == "MMInit":
+                        raise MediaManagementInitializationTimeoutError(
+                            self._source_device_str
+                        ) from err
+                    raise
+            return None
+        finally:
+            self._response_future = None
+            self._page_future = None
+
+    async def _consume(self) -> None:
+        from aiorussound.rio.client import RussoundRIOClient
+
+        assert self._connection is not None and self._connection.reader is not None
+        try:
+            async for raw_message in self._connection.reader:
+                message = RussoundRIOClient.process_response(raw_message)
+                if message is None:
+                    continue
+                if message.type == "S" and self._response_future is not None:
+                    if not self._response_future.done():
+                        self._response_future.set_result(None)
+                elif message.type == "E":
+                    error = CommandError(message.value or "Media Management command failed")
+                    if self._response_future is not None and not self._response_future.done():
+                        self._response_future.set_exception(error)
+                    elif self._page_future is not None and not self._page_future.done():
+                        self._page_future.set_exception(error)
+                elif (
+                    message.media_management_page is not None
+                    and self._page_future is not None
+                    and not self._page_future.done()
+                ):
+                    self._page_future.set_result(message.media_management_page)
+        finally:
+            if self._response_future is not None and not self._response_future.done():
+                self._response_future.set_exception(
+                    RussoundError("Media Management connection closed")
+                )
+
+    async def _close_connection(self) -> None:
+        if self._consumer_task is not None and not self._consumer_task.done():
+            self._consumer_task.cancel()
+            try:
+                await self._consumer_task
+            except asyncio.CancelledError:
+                pass
+        self._consumer_task = None
+        if self._connection is not None:
+            await self._connection.close()
+        self._connection = None
+
+    async def _keep_alive(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(DEFAULT_MEDIA_MANAGEMENT_KEEP_ALIVE_INTERVAL)
+                await self._send_event("MMKeepAlive")
+        except asyncio.CancelledError:
+            raise
+        except (CommandError, RussoundError, TimeoutError):
+            _LOGGER.warning("Media Management keep-alive failed")

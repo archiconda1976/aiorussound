@@ -11,11 +11,21 @@ import pytest
 from aiorussound.connection import (
     RussoundConnectionHandler,
     RussoundSerialConnectionHandler,
+    RussoundTcpConnectionHandler,
 )
-from aiorussound.exceptions import CommandError, RussoundError
+from aiorussound.const import SOURCE_EDITION_PORT
+from aiorussound.exceptions import (
+    CommandError,
+    MediaManagementInitializationTimeoutError,
+    RussoundError,
+)
+from aiorussound.rio import media_management
 from aiorussound.rio.client import RussoundRIOClient
-from aiorussound.rio.media_management import MediaManagementSession
-from aiorussound.rio.models import MediaManagementMenuPage
+from aiorussound.rio.media_management import (
+    MediaManagementSession,
+    SourceEditionMediaManagementSession,
+)
+from aiorussound.rio.models import MediaManagementMenuPage, SourceType
 
 MENU_PAGE = json.dumps(
     {
@@ -100,6 +110,34 @@ class FakeReaderConnection(RussoundConnectionHandler):
 
     async def connect(self) -> None:
         self.reader = asyncio.StreamReader()
+
+
+class FakeSourceEditionConnection(FakeReaderConnection):
+    """A source socket that acknowledges events and returns its menu page."""
+
+    def __init__(self, *, missing_init_pages: int = 0) -> None:
+        super().__init__()
+        self.commands: list[str] = []
+        self.missing_init_pages = missing_init_pages
+        self.connect_calls = 0
+        self.close_calls = 0
+
+    async def connect(self) -> None:
+        self.connect_calls += 1
+        await super().connect()
+
+    async def write_str(self, cmd: str) -> None:
+        self.commands.append(cmd)
+        assert self.reader is not None
+        self.reader.feed_data(b"S\r\n")
+        if cmd.endswith("MMInit") and self.missing_init_pages:
+            self.missing_init_pages -= 1
+        elif cmd.endswith("MMInit"):
+            self.reader.feed_data(f"N {MENU_PAGE}\r\n".encode())
+
+    async def close(self) -> None:
+        self.close_calls += 1
+        await super().close()
 
 
 def test_processes_json_media_management_notification() -> None:
@@ -202,6 +240,79 @@ async def test_serial_client_creates_media_management_session() -> None:
     session = client.create_media_management_session("C[1].Z[1]")
 
     assert isinstance(session, MediaManagementSession)
+
+
+@pytest.mark.asyncio
+async def test_tcp_streamer_creates_source_edition_session() -> None:
+    """TCP streamers use a dedicated Source Edition connection on port 9622."""
+    client = RussoundRIOClient(RussoundTcpConnectionHandler("192.0.2.1"))
+
+    session = client.create_media_management_session(
+        "C[1].Z[1]",
+        source_id=4,
+        source_type=SourceType.RUSSOUND_MEDIA_STREAMER,
+    )
+
+    assert isinstance(session, SourceEditionMediaManagementSession)
+    assert client.connection_handler.create_source_edition_connection().port == (
+        SOURCE_EDITION_PORT
+    )
+
+
+@pytest.mark.asyncio
+async def test_source_edition_initializes_with_source_addressed_events() -> None:
+    """A dedicated source socket initializes one source-addressed MM session."""
+    connection = FakeSourceEditionConnection()
+    session = SourceEditionMediaManagementSession(lambda: connection, 4, page_size=25)
+
+    page = await session.initialize()
+    await session.close()
+
+    assert page.num_items == 2
+    assert connection.commands == [
+        "EVENT S[4]!MMVerbosity 2",
+        "EVENT S[4]!MMIndex ABSOLUTE",
+        "EVENT S[4]!MMMaxItems 25",
+        "EVENT S[4]!MMFormat JSON",
+        "EVENT S[4]!MMInit",
+        "EVENT S[4]!MMClose",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_source_edition_retries_after_acknowledged_missing_menu_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A source session retries once on a fresh socket when MMInit returns no page."""
+    monkeypatch.setattr(media_management, "TIMEOUT", 0.01)
+    connection = FakeSourceEditionConnection(missing_init_pages=1)
+    session = SourceEditionMediaManagementSession(lambda: connection, 4)
+
+    page = await session.initialize()
+
+    assert page.num_items == 2
+    assert connection.connect_calls == 2
+    assert connection.close_calls == 1
+    assert connection.commands.count("EVENT S[4]!MMInit") == 2
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_source_edition_reports_timeout_after_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unresponsive source reports a specific error after its one retry."""
+    monkeypatch.setattr(media_management, "TIMEOUT", 0.01)
+    connection = FakeSourceEditionConnection(missing_init_pages=2)
+    session = SourceEditionMediaManagementSession(lambda: connection, 4)
+
+    with pytest.raises(MediaManagementInitializationTimeoutError, match="S\\[4\\]"):
+        await session.initialize()
+
+    assert connection.connect_calls == 2
+    assert connection.close_calls == 1
+    assert connection.commands.count("EVENT S[4]!MMInit") == 2
+    await session.close()
 
 
 @pytest.mark.asyncio

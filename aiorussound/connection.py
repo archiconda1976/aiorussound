@@ -10,6 +10,7 @@ from aiorussound import RussoundError
 from aiorussound.const import (
     DEFAULT_PORT,
     DEFAULT_BAUDRATE,
+    SOURCE_EDITION_PORT,
     TIMEOUT,
 )
 
@@ -32,6 +33,14 @@ class RussoundConnectionHandler:
         self.writer.write(data)
         await self.writer.drain()
 
+    async def close(self) -> None:
+        """Close the underlying connection, if it was opened."""
+        if self.writer is not None:
+            self.writer.close()
+            await self.writer.wait_closed()
+        self.reader = None
+        self.writer = None
+
     @abstractmethod
     async def connect(self) -> None:
         raise NotImplementedError
@@ -52,6 +61,10 @@ class RussoundTcpConnectionHandler(RussoundConnectionHandler):
             reader, writer = await asyncio.open_connection(self.host, self.port)
         self.reader = reader
         self.writer = writer
+
+    def create_source_edition_connection(self) -> "RussoundTcpConnectionHandler":
+        """Create a streamer Source Edition connection for Media Management."""
+        return RussoundTcpConnectionHandler(self.host, SOURCE_EDITION_PORT)
 
 class RussoundSerialConnectionHandler(RussoundConnectionHandler):
     def __init__(self, port: str, baudrate: int = DEFAULT_BAUDRATE) -> None:

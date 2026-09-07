@@ -10,7 +10,7 @@ from typing import Any, Coroutine, Optional
 
 from mashumaro import field_options
 
-from aiorussound.connection import RussoundConnectionHandler
+from aiorussound.connection import RussoundConnectionHandler, RussoundTcpConnectionHandler
 from aiorussound.const import (
     FLAGS_BY_VERSION,
     MAX_SOURCE,
@@ -34,11 +34,15 @@ from aiorussound.rio.models import (
     RussoundMessage,
     CallbackType,
     Source,
+    SourceType,
     Zone,
     MessageType,
     PartyMode,
 )
-from aiorussound.rio.media_management import MediaManagementSession
+from aiorussound.rio.media_management import (
+    MediaManagementSession,
+    SourceEditionMediaManagementSession,
+)
 from aiorussound.util import (
     controller_device_str,
     is_feature_supported,
@@ -324,9 +328,24 @@ class RussoundRIOClient:
         return RussoundMessage(tag, media_management_page=page)
 
     def create_media_management_session(
-        self, zone_device_str: str, *, page_size: int = 100
-    ) -> MediaManagementSession:
-        """Create a controller-routed Media Management session."""
+        self,
+        zone_device_str: str,
+        *,
+        page_size: int = 100,
+        source_id: int | None = None,
+        source_type: SourceType | None = None,
+    ) -> MediaManagementSession | SourceEditionMediaManagementSession:
+        """Create a Media Management session suited to the active transport."""
+        if (
+            isinstance(self.connection_handler, RussoundTcpConnectionHandler)
+            and source_id is not None
+            and source_type == SourceType.RUSSOUND_MEDIA_STREAMER
+        ):
+            return SourceEditionMediaManagementSession(
+                self.connection_handler.create_source_edition_connection,
+                source_id,
+                page_size=page_size,
+            )
         return MediaManagementSession(self, zone_device_str, page_size=page_size)
 
     def _register_media_management_session(
@@ -573,10 +592,14 @@ class ZoneControlSurface(Zone):
 
     def create_media_management_session(
         self, *, page_size: int = 100
-    ) -> MediaManagementSession:
+    ) -> MediaManagementSession | SourceEditionMediaManagementSession:
         """Create a Media Management session for this zone."""
+        source = self.fetch_current_source()
         return self.client.create_media_management_session(
-            self.device_str, page_size=page_size
+            self.device_str,
+            page_size=page_size,
+            source_id=self.current_source,
+            source_type=source.type,
         )
 
     def fetch_current_source(self) -> Source:
